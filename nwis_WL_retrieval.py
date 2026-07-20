@@ -13,7 +13,7 @@ site_list = ['USGS-460014118281805']
 # site_list = ['USGS-464017120282501', 'USGS-464042120272801'] 
 
 ### API key
-os.environ["API_USGS_PAT"] = "46fCmfu2RJt5c4m027qU1LOOWPvBp5mldEm3APhZ"
+os.environ["API_USGS_PAT"] = "YEFmSDAWwYfH3gwRAuiQl2vtN1FRuXK6vbO3Ol5U"
 
 ### Parameter codes
 # pcode = '62611' # Groundwater level above NAVD 1988, feet
