@@ -307,11 +307,13 @@ ax.scatter(basalt['x'], basalt['y'], c='red', s=25, marker='s',
 
 # SD-scaled open circles (optional)
 if PLOT_SD_BUBBLES:
-    sd_vals = df_all_coords['sd_ft'].fillna(0)
+    # Only include wells with valid SD values
+    valid_bubble = df_all_coords.dropna(subset=['sd_ft'])
+    sd_vals = valid_bubble['sd_ft']
     sd_min, sd_max = sd_vals.min(), sd_vals.max()
     sd_range = sd_max - sd_min if sd_max > sd_min else 1.0
     bubble_sizes = 100 + ((sd_vals - sd_min) / sd_range) * 1100
-    ax.scatter(df_all_coords['x'], df_all_coords['y'],
+    ax.scatter(valid_bubble['x'], valid_bubble['y'],
                s=bubble_sizes, facecolors='none', edgecolors='black',
                linewidths=1.0, zorder=7, label='SD magnitude')
 
@@ -378,12 +380,13 @@ ax.scatter(basalt['x'], basalt['y'], c='red', s=25, marker='s',
 
 # SD-scaled open circles (optional)
 if PLOT_SD_BUBBLES:
-    # Scale: map SD range to circle area range (100 to 1200 pts^2)
-    sd_vals = df_all_coords['sd_ft'].fillna(0)
+    # Only include wells with valid SD values
+    valid_bubble = df_all_coords.dropna(subset=['sd_ft'])
+    sd_vals = valid_bubble['sd_ft']
     sd_min, sd_max = sd_vals.min(), sd_vals.max()
     sd_range = sd_max - sd_min if sd_max > sd_min else 1.0
     bubble_sizes = 100 + ((sd_vals - sd_min) / sd_range) * 1100
-    ax.scatter(df_all_coords['x'], df_all_coords['y'],
+    ax.scatter(valid_bubble['x'], valid_bubble['y'],
                s=bubble_sizes, facecolors='none', edgecolors='black',
                linewidths=1.0, zorder=7, label='SD magnitude')
 
