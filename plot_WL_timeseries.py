@@ -4,7 +4,11 @@ import matplotlib.dates as mdates
 from pathlib import Path
 
 # Path to downloaded data
-data_dir = Path(r'c:\A\Code_msc\data_retrieval\downloaded')
+data_dir = Path(r'downloaded')
+
+# Output directory for plots
+plot_dir = Path('plots')
+plot_dir.mkdir(exist_ok=True)
 
 # Read and combine all USGS files
 frames = []
@@ -70,8 +74,8 @@ ax_left.xaxis.set_minor_locator(mdates.MonthLocator())
 ax_left.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 
 plt.tight_layout()
-plt.savefig(data_dir / 'WL_depth_hydrogr.png', dpi=150)
-print(f"Plot saved to {data_dir / 'WL_depth_hydrogr.png'}")
+plt.savefig(plot_dir / 'WL_depth_hydrogr.png', dpi=150)
+print(f"Plot saved to {plot_dir / 'WL_depth_hydrogr.png'}")
 plt.close()
 
 # --- Plot 2: WL altitude above NAVD88 (excluding 23R01) ---
@@ -95,8 +99,8 @@ ax.xaxis.set_minor_locator(mdates.MonthLocator())
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 
 plt.tight_layout()
-plt.savefig(data_dir / 'WL_altitude_hydrogr.png', dpi=150)
-print(f"Plot saved to {data_dir / 'WL_altitude_hydrogr.png'}")
+plt.savefig(plot_dir / 'WL_altitude_hydrogr.png', dpi=150)
+print(f"Plot saved to {plot_dir / 'WL_altitude_hydrogr.png'}")
 plt.close()
 
 # plt.show()  # Uncomment to display interactively
