@@ -262,6 +262,7 @@ dependencies:
   - zstandard=0.23.0
   - zstd=1.5.6
   - pip:
+      - adjusttext==1.4.0
       - attrs==26.1.0
       - cffi==2.0.0
       - dataretrieval==1.1.5
