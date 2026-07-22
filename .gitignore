@@ -3,3 +3,5 @@ downloaded/
 plots/
 continuous_WL.csv
 zscratch.txt
+__pycache__/
+run_output.txt
