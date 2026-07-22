@@ -15,6 +15,9 @@ Produces two plots:
 import matplotlib
 matplotlib.use('Agg')
 
+import warnings
+warnings.filterwarnings('ignore', message='posx and posy should be finite values')
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,6 +40,7 @@ plot_dir.mkdir(exist_ok=True)
 # Plot options
 PLOT_SD_CONTOURS = False  # Set to True to enable SD interpolation color flood on SD map
 PLOT_SD_BUBBLES  = True   # Set to False to disable SD-scaled open circles on SD map
+PLOT_BASEMAP     = True  # Set to True to fetch USGS topo basemap tiles for maps
 
 # =============================================================================
 # Load Washington (USGS) Data
@@ -118,6 +122,45 @@ print("Change from initial WL computed for all sites.")
 
 # LOESS smoothing fraction (0 to 1; larger = smoother)
 loess_frac = 0.1
+
+# =============================================================================
+# Aquifer type lookups (basalt vs basin-fill) for line style in hydrographs
+# =============================================================================
+# USGS: aquifer_code starting with '122' = basalt
+_usgs_aquifer_lookup = {}
+for _, row in df_site.iterrows():
+    aquifer_code = str(row.get('aquifer_code', ''))
+    if aquifer_code.startswith('122'):
+        _usgs_aquifer_lookup[row['monitoring_location_id']] = 'basalt'
+    else:
+        _usgs_aquifer_lookup[row['monitoring_location_id']] = 'basin-fill'
+
+# OWRD: aquifer field containing 'basalt' = basalt
+_owrd_site_info = pd.read_csv(data_dir / 'OWRD_site_info.csv')
+_owrd_aquifer_lookup = {}
+for _, row in _owrd_site_info.iterrows():
+    aquifer = str(row.get('aquifer', '')).lower()
+    if 'basalt' in aquifer:
+        _owrd_aquifer_lookup[row['gw_logid']] = 'basalt'
+    else:
+        _owrd_aquifer_lookup[row['gw_logid']] = 'basin-fill'
+
+
+def get_linestyle_usgs(site_id):
+    """Return solid for basalt, dashed for basin-fill."""
+    return '-' if _usgs_aquifer_lookup.get(site_id) == 'basalt' else '--'
+
+
+def get_linestyle_owrd(well_id):
+    """Return solid for basalt, dashed for basin-fill."""
+    return '-' if _owrd_aquifer_lookup.get(well_id) == 'basalt' else '--'
+
+
+def shorten_well_name(name):
+    """Shorten UMAT well names: 'UMAT0003879' -> 'U03879'."""
+    if name.startswith('UMAT'):
+        return 'U' + name[-5:]
+    return name
 
 # =============================================================================
 # Plot 3: Well Location Map
@@ -248,9 +291,14 @@ for _, row in df_owrd_site.iterrows():
             aquifer_type = 'basalt'
         else:
             aquifer_type = 'basin-fill'
+        # Shorten UMAT labels: "UMAT0003879" -> "U03879"
+        if gw_logid.startswith('UMAT'):
+            short_label = 'U' + gw_logid[-5:]
+        else:
+            short_label = gw_logid
         owrd_coords.append({
             'site_id': gw_logid,
-            'label': gw_logid,
+            'label': short_label,
             'lon': float(lon),
             'lat': float(lat),
             'state': 'OR',
@@ -297,6 +345,18 @@ df_all_coords['y'] = y_proj
 basin_fill = df_all_coords[df_all_coords['aquifer_type'] == 'basin-fill']
 basalt = df_all_coords[df_all_coords['aquifer_type'] == 'basalt']
 
+# Compute mean WL altitude for each well (for map labels)
+altitude_lookup_site = df_site.set_index('monitoring_location_id')['altitude'].to_dict()
+mean_wl_alt = {}
+for site, group in df_usgs_daily.groupby('monitoring_location_id'):
+    alt = altitude_lookup_site.get(site)
+    if alt is not None and not pd.isna(alt):
+        mean_wl_alt[site] = alt - group['value'].mean()
+for well_id, group in df_owrd.groupby('well_id'):
+    vals = group['wl_ft_above_msl'].dropna()
+    if len(vals) > 0:
+        mean_wl_alt[well_id] = vals.mean()
+
 # --- Plot 3a: Map with Site IDs only ---
 fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -321,13 +381,22 @@ from adjustText import adjust_text
 
 texts_3a = []
 for _, row in df_all_coords.iterrows():
-    texts_3a.append(ax.text(row['x'], row['y'], row['label'],
+    mean_alt = mean_wl_alt.get(row['site_id'])
+    if mean_alt is not None and not pd.isna(mean_alt):
+        lbl = f"{row['label']} ({mean_alt:.0f})"
+    else:
+        lbl = row['label']
+    texts_3a.append(ax.text(row['x'], row['y'], lbl,
                             fontsize=5.5, alpha=0.9, zorder=10))
 
 adjust_text(texts_3a, ax=ax)
 
-cx.add_basemap(ax, crs='EPSG:2286',
-               source=cx.providers.USGS.USTopo, zoom=11)
+if PLOT_BASEMAP:
+    try:
+        cx.add_basemap(ax, crs='EPSG:2286',
+                       source=cx.providers.USGS.USTopo, zoom=10)
+    except Exception as e:
+        print(f"  Warning: Could not load basemap for Plot 3a: {e}")
 
 ax.set_xlabel('Easting (ft)')
 ax.set_ylabel('Northing (ft)')
@@ -398,8 +467,12 @@ for _, row in df_all_coords.iterrows():
 
 adjust_text(texts_3b, ax=ax)
 
-cx.add_basemap(ax, crs='EPSG:2286',
-               source=cx.providers.USGS.USTopo, zoom=11)
+if PLOT_BASEMAP:
+    try:
+        cx.add_basemap(ax, crs='EPSG:2286',
+                       source=cx.providers.USGS.USTopo, zoom=10)
+    except Exception as e:
+        print(f"  Warning: Could not load basemap for Plot 3b: {e}")
 
 ax.set_xlabel('Easting (ft)')
 ax.set_ylabel('Northing (ft)')
@@ -449,9 +522,10 @@ for site, group in df_usgs_daily.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['z_score'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)}"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
-            lowess[:, 1], label=label, linewidth=0.8)
+            lowess[:, 1], label=label, linewidth=0.8,
+            linestyle=get_linestyle_usgs(site))
 
 # OWRD sites
 for well_id, group in df_owrd.groupby('well_id'):
@@ -468,9 +542,10 @@ for well_id, group in df_owrd.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['z_score'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {well_id}"
+    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
-            lowess[:, 1], label=label, linewidth=0.8, linestyle='--')
+            lowess[:, 1], label=label, linewidth=0.8,
+            linestyle=get_linestyle_owrd(well_id))
 
 # Reference line at zero
 ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
@@ -556,25 +631,27 @@ fig, (ax_top, ax_bot) = plt.subplots(
 for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     group_sorted = group.sort_values('date')
     sd_val = usgs_sd_lookup.get(site, 0)
-    label = f"WA - {usgs_label_lookup.get(site, site)}"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    ls = get_linestyle_usgs(site)
     if sd_val >= SD_THRESHOLD:
         ax_top.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-                    label=label, linewidth=0.8)
+                    label=label, linewidth=0.8, linestyle=ls)
     else:
         ax_bot.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-                    label=label, linewidth=0.8)
+                    label=label, linewidth=0.8, linestyle=ls)
 
 # Plot OWRD
 for well_id, group in df_owrd_dev.groupby('well_id'):
     group_sorted = group.sort_values('date')
     sd_val = owrd_sd_lookup.get(well_id, 0)
-    label = f"OR - {well_id}"
+    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    ls = get_linestyle_owrd(well_id)
     if sd_val >= SD_THRESHOLD:
         ax_top.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-                    label=label, linewidth=0.8, linestyle='--')
+                    label=label, linewidth=0.8, linestyle=ls)
     else:
         ax_bot.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-                    label=label, linewidth=0.8, linestyle='--')
+                    label=label, linewidth=0.8, linestyle=ls)
 
 # Set y-limits
 ax_top.set_ylim(top6_y_lo - top6_pad, top6_y_hi + top6_pad)
@@ -607,19 +684,19 @@ plt.close()
 
 fig, ax = plt.subplots(figsize=(14, 7))
 
-# Plot USGS (WA) sites with solid lines
+# Plot USGS (WA) sites
 for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     group_sorted = group.sort_values('date')
-    label = f"WA - {usgs_label_lookup.get(site, site)}"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
     ax.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-            label=label, linewidth=0.8)
+            label=label, linewidth=0.8, linestyle=get_linestyle_usgs(site))
 
-# Plot OWRD (OR) sites with dashed lines
+# Plot OWRD (OR) sites
 for well_id, group in df_owrd_dev.groupby('well_id'):
     group_sorted = group.sort_values('date')
-    label = f"OR - {well_id}"
+    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
     ax.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
-            label=label, linewidth=0.8, linestyle='--')
+            label=label, linewidth=0.8, linestyle=get_linestyle_owrd(well_id))
 
 # Reference line at zero
 ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
@@ -658,9 +735,10 @@ for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)}"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
-            lowess[:, 1], label=label, linewidth=0.8)
+            lowess[:, 1], label=label, linewidth=0.8,
+            linestyle=get_linestyle_usgs(site))
 
 # OWRD (OR) sites - LOESS
 for well_id, group in df_owrd_dev.groupby('well_id'):
@@ -671,9 +749,10 @@ for well_id, group in df_owrd_dev.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {well_id}"
+    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
-            lowess[:, 1], label=label, linewidth=0.8, linestyle='--')
+            lowess[:, 1], label=label, linewidth=0.8,
+            linestyle=get_linestyle_owrd(well_id))
 
 ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
 ax.set_xlim(t_start, t_end)
@@ -712,12 +791,15 @@ for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)}"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
     dates_smooth = pd.to_datetime(lowess[:, 0], unit='D', origin=t_start)
+    ls = get_linestyle_usgs(site)
     if sd_val >= SD_THRESHOLD:
-        ax_top.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8)
+        ax_top.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8,
+                    linestyle=ls)
     else:
-        ax_bot.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8)
+        ax_bot.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8,
+                    linestyle=ls)
 
 # OWRD
 for well_id, group in df_owrd_dev.groupby('well_id'):
@@ -729,14 +811,15 @@ for well_id, group in df_owrd_dev.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {well_id}"
+    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
     dates_smooth = pd.to_datetime(lowess[:, 0], unit='D', origin=t_start)
+    ls = get_linestyle_owrd(well_id)
     if sd_val >= SD_THRESHOLD:
         ax_top.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8,
-                    linestyle='--')
+                    linestyle=ls)
     else:
         ax_bot.plot(dates_smooth, lowess[:, 1], label=label, linewidth=0.8,
-                    linestyle='--')
+                    linestyle=ls)
 
 # Set y-limits
 ax_top.set_ylim(top6_y_lo - top6_pad, top6_y_hi + top6_pad)
@@ -760,4 +843,310 @@ ax_bot.set_xlabel('Date')
 plt.tight_layout()
 plt.savefig(plot_dir / 'WL_deviation_loess_by_SD_group.png', dpi=150)
 print(f"Plot 9 saved to {plot_dir / 'WL_deviation_loess_by_SD_group.png'}")
+plt.close()
+
+
+# =============================================================================
+# Per-group plots: Deviation from mean, one file per well group
+# =============================================================================
+# Read well groups
+df_well_groups = pd.read_csv(Path('script_input') / 'well_groups.csv')
+
+# Output directory for group plots
+group_plot_dir = Path('plots') / 'by_group'
+group_plot_dir.mkdir(parents=True, exist_ok=True)
+
+# Build a lookup from well_name to group
+group_lookup = {}
+for _, row in df_well_groups.iterrows():
+    wg = str(row.get('well_group', '')).strip()
+    if wg and wg != 'nan':
+        group_lookup[row['well_name']] = wg
+
+# Determine global y-limits across ALL groups so vertical scale is consistent
+all_dev_vals = []
+
+for _, row in df_well_groups.iterrows():
+    well_name = row['well_name']
+    site_id = row['monitoring_location_id']
+    wg = str(row.get('well_group', '')).strip()
+    if not wg or wg == 'nan':
+        continue
+
+    # Find deviation data for this well
+    if site_id != 'NA' and not pd.isna(site_id):
+        # USGS well
+        mask = df_usgs_dev['monitoring_location_id'] == site_id
+        vals = df_usgs_dev.loc[mask, 'wl_dev_ft'].dropna().values
+    else:
+        # OWRD well
+        mask = df_owrd_dev['well_id'] == well_name
+        vals = df_owrd_dev.loc[mask, 'wl_dev_ft'].dropna().values
+
+    if len(vals) > 0:
+        all_dev_vals.extend(vals)
+
+if all_dev_vals:
+    global_y_min = np.nanmin(all_dev_vals)
+    global_y_max = np.nanmax(all_dev_vals)
+    global_y_pad = (global_y_max - global_y_min) * 0.05
+    global_y_min -= global_y_pad
+    global_y_max += global_y_pad
+else:
+    global_y_min, global_y_max = -20, 10
+
+# Get unique groups
+unique_groups = sorted(set(g for g in group_lookup.values()))
+
+for grp in unique_groups:
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    # Get wells in this group
+    grp_wells = df_well_groups[df_well_groups['well_group'] == grp]
+
+    for _, row in grp_wells.iterrows():
+        well_name = row['well_name']
+        site_id = row['monitoring_location_id']
+        aquifer = str(row.get('Aquifer', '')).strip()
+        ls = '-' if aquifer == 'basalt' else '--'
+
+        if site_id != 'NA' and not pd.isna(site_id):
+            # USGS well
+            mask = df_usgs_dev['monitoring_location_id'] == site_id
+            group_data = df_usgs_dev.loc[mask].sort_values('date')
+            mean_alt_val = mean_wl_alt.get(site_id, 0)
+            label = f"WA - {usgs_label_lookup.get(site_id, well_name)} ({mean_alt_val:.0f})"
+        else:
+            # OWRD well
+            mask = df_owrd_dev['well_id'] == well_name
+            group_data = df_owrd_dev.loc[mask].sort_values('date')
+            mean_alt_val = mean_wl_alt.get(well_name, 0)
+            label = f"OR - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
+
+        if len(group_data) == 0:
+            continue
+
+        ax.plot(group_data['date'], group_data['wl_dev_ft'],
+                label=label, linewidth=0.8, linestyle=ls)
+
+    # Reference line at zero
+    ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
+
+    # Consistent vertical scale
+    ax.set_ylim(global_y_min, global_y_max)
+    ax.set_xlim(t_start, t_end)
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Deviation from Mean WL (ft)')
+    ax.set_title(f'Walla Walla Basin - Deviation from Mean WL: Group {grp}')
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    ax.legend(fontsize=8, loc='best')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    outfile = group_plot_dir / f'WL_deviation_group_{grp}.png'
+    plt.savefig(outfile, dpi=150)
+    print(f"Group {grp} plot saved to {outfile}")
+    plt.close()
+
+
+# =============================================================================
+# Per-group plots: Water Level Altitude above NAVD88
+# =============================================================================
+# Compute WL altitude for USGS wells: land_surface_altitude - depth_to_water
+altitude_lookup = df_site.set_index('monitoring_location_id')['altitude'].to_dict()
+
+usgs_alt_data = []
+for site, group in df_usgs_daily.groupby('monitoring_location_id'):
+    group = group.sort_values('date').copy()
+    alt = altitude_lookup.get(site)
+    if alt is None or pd.isna(alt):
+        continue
+    group['wl_altitude_ft'] = alt - group['value']
+    usgs_alt_data.append(group)
+
+df_usgs_alt = pd.concat(usgs_alt_data, ignore_index=True)
+
+# OWRD already has 'wl_ft_above_msl' column
+df_owrd_alt = df_owrd.copy()
+
+# Determine altitude ranges per group (excluding 23R01)
+exclude_site = 'USGS-461935118081501'
+
+group_alt_ranges = {}
+for grp in unique_groups:
+    grp_wells = df_well_groups[df_well_groups['well_group'] == grp]
+    grp_min, grp_max = np.inf, -np.inf
+
+    for _, row in grp_wells.iterrows():
+        well_name = row['well_name']
+        site_id = row['monitoring_location_id']
+
+        # Exclude 23R01
+        if site_id == exclude_site:
+            continue
+
+        if site_id != 'NA' and not pd.isna(site_id):
+            mask = df_usgs_alt['monitoring_location_id'] == site_id
+            vals = df_usgs_alt.loc[mask, 'wl_altitude_ft'].dropna().values
+        else:
+            mask = df_owrd_alt['well_id'] == well_name
+            vals = df_owrd_alt.loc[mask, 'wl_ft_above_msl'].dropna().values
+
+        if len(vals) > 0:
+            grp_min = min(grp_min, np.nanmin(vals))
+            grp_max = max(grp_max, np.nanmax(vals))
+
+    if grp_min < np.inf:
+        group_alt_ranges[grp] = (grp_min, grp_max)
+
+# Determine a target ft/inch ratio that works for most groups
+# Use the group with the largest range to set the baseline
+# Target usable plot height: ~8 inches (letter page with margins)
+USABLE_PLOT_HEIGHT_INCHES = 8.0
+FIG_WIDTH = 14
+
+all_ranges = [(mx - mn) for mn, mx in group_alt_ranges.values()]
+max_range = max(all_ranges) if all_ranges else 30
+# Target ratio: ft per inch of plot
+target_ft_per_inch = max_range / USABLE_PLOT_HEIGHT_INCHES
+
+for grp in unique_groups:
+    if grp not in group_alt_ranges:
+        continue
+
+    grp_min, grp_max = group_alt_ranges[grp]
+    grp_range = grp_max - grp_min
+    grp_pad = grp_range * 0.05
+    y_lo = grp_min - grp_pad
+    y_hi = grp_max + grp_pad
+    padded_range = y_hi - y_lo
+
+    # Compute figure height to maintain target ft/inch ratio
+    fig_height = padded_range / target_ft_per_inch
+    # Clamp to reasonable page size (min 4", max 10")
+    fig_height = max(4.0, min(10.0, fig_height))
+
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, fig_height))
+
+    grp_wells = df_well_groups[df_well_groups['well_group'] == grp]
+
+    for _, row in grp_wells.iterrows():
+        well_name = row['well_name']
+        site_id = row['monitoring_location_id']
+        aquifer = str(row.get('Aquifer', '')).strip()
+        ls = '-' if aquifer == 'basalt' else '--'
+
+        # Exclude 23R01
+        if site_id == exclude_site:
+            continue
+
+        if site_id != 'NA' and not pd.isna(site_id):
+            mask = df_usgs_alt['monitoring_location_id'] == site_id
+            group_data = df_usgs_alt.loc[mask].sort_values('date')
+            label = f"WA - {usgs_label_lookup.get(site_id, well_name)}"
+            y_col = 'wl_altitude_ft'
+        else:
+            mask = df_owrd_alt['well_id'] == well_name
+            group_data = df_owrd_alt.loc[mask].sort_values('date')
+            label = f"OR - {shorten_well_name(well_name)}"
+            y_col = 'wl_ft_above_msl'
+
+        if len(group_data) == 0:
+            continue
+
+        ax.plot(group_data['date'], group_data[y_col],
+                label=label, linewidth=0.8, linestyle=ls)
+
+    ax.set_ylim(y_lo, y_hi)
+    ax.set_xlim(t_start, t_end)
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Water Level Altitude (ft above NAVD88)')
+    ax.set_title(f'Walla Walla Basin - WL Altitude: Group {grp}')
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    ax.legend(fontsize=8, loc='best')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    outfile = group_plot_dir / f'WL_altitude_group_{grp}.png'
+    plt.savefig(outfile, dpi=150)
+    print(f"Group {grp} altitude plot saved to {outfile}")
+    plt.close()
+
+
+# =============================================================================
+# Plot 10: Map with short well names, colored by group
+# =============================================================================
+fig, ax = plt.subplots(figsize=(10, 8))
+
+# Build group lookup from well_groups file
+_group_by_site = {}
+for _, row in df_well_groups.iterrows():
+    wg = str(row.get('well_group', '')).strip()
+    if wg == 'nan':
+        wg = ''
+    site_id = row['monitoring_location_id']
+    well_name = row['well_name']
+    if site_id != 'NA' and not pd.isna(site_id):
+        _group_by_site[site_id] = wg
+    else:
+        _group_by_site[well_name] = wg
+
+# Assign colors to groups
+group_colors = {'A': 'tab:blue', 'B': 'tab:orange', 'C': 'tab:green',
+                'D': 'tab:purple', 'E': 'tab:red', '': 'gray'}
+
+# Plot wells colored by group, with aquifer-type markers
+for _, row in df_all_coords.iterrows():
+    grp = _group_by_site.get(row['site_id'], '')
+    color = group_colors.get(grp, 'gray')
+    marker = 's' if row['aquifer_type'] == 'basalt' else 'o'
+    size = 25 if row['aquifer_type'] == 'basalt' else 80
+    ax.scatter(row['x'], row['y'], c=color, s=size, marker=marker,
+               zorder=5, edgecolors='black', linewidths=0.5)
+
+# Legend entries for groups
+for grp in sorted(group_colors.keys()):
+    if grp == '':
+        label = 'No group'
+    else:
+        label = f'Group {grp}'
+    ax.scatter([], [], c=group_colors[grp], s=40, marker='o',
+               edgecolors='black', linewidths=0.5, label=label)
+
+# Legend entries for aquifer type (marker shape)
+ax.scatter([], [], c='gray', s=80, marker='o', edgecolors='black',
+           linewidths=0.5, label='Basin-fill (circle)')
+ax.scatter([], [], c='gray', s=25, marker='s', edgecolors='black',
+           linewidths=0.5, label='Basalt (square)')
+
+texts_10 = []
+for _, row in df_all_coords.iterrows():
+    texts_10.append(ax.text(row['x'], row['y'], row['label'],
+                            fontsize=5.5, alpha=0.9, zorder=10))
+
+adjust_text(texts_10, ax=ax)
+
+if PLOT_BASEMAP:
+    try:
+        cx.add_basemap(ax, crs='EPSG:2286',
+                       source=cx.providers.USGS.USTopo, zoom=10)
+    except Exception as e:
+        print(f"  Warning: Could not load basemap for Plot 10: {e}")
+
+ax.set_xlabel('Easting (ft)')
+ax.set_ylabel('Northing (ft)')
+ax.set_title('Walla Walla Basin - Well Locations by Group (WA & OR)\n'
+             'NAD 1983 StatePlane Washington South FIPS 4602 (ft)')
+ax.legend(loc='best', fontsize=7)
+plt.tight_layout()
+plt.savefig(group_plot_dir / 'WL_well_locations_groups_map.png', dpi=150)
+print(f"Plot 10 saved to {group_plot_dir / 'WL_well_locations_groups_map.png'}")
 plt.close()
