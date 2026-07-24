@@ -310,6 +310,15 @@ df_owrd_coords = pd.DataFrame(owrd_coords)
 # --- Combine and plot ---
 df_all_coords = pd.concat([df_usgs_coords, df_owrd_coords], ignore_index=True)
 
+# Filter to only include wells listed in well_groups.csv
+_wg = pd.read_csv(Path('script_input') / 'well_groups.csv')
+_valid_sites = set(_wg['monitoring_location_id'].dropna().tolist() +
+                   _wg['well_name'].tolist())
+_valid_sites.discard('NA')
+df_all_coords = df_all_coords[
+    df_all_coords['site_id'].isin(_valid_sites)
+].reset_index(drop=True)
+
 import contextily as cx
 from pyproj import Transformer
 
@@ -898,17 +907,47 @@ else:
 # Get unique groups
 unique_groups = sorted(set(g for g in group_lookup.values()))
 
+# Reference ft/inch ratio from the global y-range (used by groups A and B)
+FIG_WIDTH_DEV = 14
+FIG_HEIGHT_DEV = 7  # reference height for groups using global y-range
+global_y_range = global_y_max - global_y_min
+ref_ft_per_inch = global_y_range / FIG_HEIGHT_DEV
+
 for grp in unique_groups:
-    fig, ax = plt.subplots(figsize=(14, 7))
+    # Determine y-limits and figure height
+    custom_ylim = {'B': (global_y_min, 20), 'C': (-5, 10), 'D': (-15, 15), 'E': (-10, 15)}
+    if grp in custom_ylim:
+        y_lo, y_hi = custom_ylim[grp]
+        grp_range = y_hi - y_lo
+        fig_height = grp_range / ref_ft_per_inch
+    else:
+        y_lo, y_hi = global_y_min, global_y_max
+        fig_height = FIG_HEIGHT_DEV
+
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH_DEV, fig_height))
 
     # Get wells in this group
-    grp_wells = df_well_groups[df_well_groups['well_group'] == grp]
+    grp_wells = df_well_groups[df_well_groups['well_group'] == grp].copy()
 
-    for _, row in grp_wells.iterrows():
+    # For group E, sort wells by SD (largest first) for legend ordering
+    if grp == 'E':
+        def _get_sd(row):
+            site_id = row['monitoring_location_id']
+            well_name = row['well_name']
+            if site_id != 'NA' and not pd.isna(site_id):
+                return usgs_sd_lookup.get(site_id, 0)
+            else:
+                return owrd_sd_lookup.get(well_name, 0)
+        grp_wells = grp_wells.assign(_sd=grp_wells.apply(_get_sd, axis=1))
+        grp_wells = grp_wells.sort_values('_sd', ascending=False)
+
+    # Alternate linestyles to visually distinguish lines
+    linestyle_cycle = ['-', '--', '-.', ':']
+    ls_index = 0
+
+    for i_well, (_, row) in enumerate(grp_wells.iterrows()):
         well_name = row['well_name']
         site_id = row['monitoring_location_id']
-        aquifer = str(row.get('Aquifer', '')).strip()
-        ls = '-' if aquifer == 'basalt' else '--'
 
         if site_id != 'NA' and not pd.isna(site_id):
             # USGS well
@@ -926,14 +965,31 @@ for grp in unique_groups:
         if len(group_data) == 0:
             continue
 
-        ax.plot(group_data['date'], group_data['wl_dev_ft'],
-                label=label, linewidth=0.8, linestyle=ls)
+        # Special styling for 23R01 in group E (plot below other lines)
+        if site_id == 'USGS-461935118081501' and grp == 'E':
+            ax.plot(group_data['date'], group_data['wl_dev_ft'],
+                    label=label, linewidth=3.0, linestyle='-', color='lightgray',
+                    zorder=1)
+        # Thicker line for U58161 in group E (keep default color)
+        elif well_name == 'UMAT0058161' and grp == 'E':
+            ls = linestyle_cycle[ls_index % len(linestyle_cycle)]
+            ax.plot(group_data['date'], group_data['wl_dev_ft'],
+                    label=label, linewidth=1.5, linestyle=ls, zorder=2)
+            ls_index += 1
+        else:
+            ls = linestyle_cycle[ls_index % len(linestyle_cycle)]
+            ax.plot(group_data['date'], group_data['wl_dev_ft'],
+                    label=label, linewidth=0.8, linestyle=ls, zorder=2)
+            ls_index += 1
 
     # Reference line at zero
     ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
 
-    # Consistent vertical scale
-    ax.set_ylim(global_y_min, global_y_max)
+    # Vertical scale: custom per group, or global default
+    if grp in custom_ylim:
+        ax.set_ylim(custom_ylim[grp])
+    else:
+        ax.set_ylim(global_y_min, global_y_max)
     ax.set_xlim(t_start, t_end)
     ax.set_xlabel('Date')
     ax.set_ylabel('Deviation from Mean WL (ft)')
@@ -1104,28 +1160,42 @@ group_colors = {'A': 'tab:blue', 'B': 'tab:orange', 'C': 'tab:green',
                 'D': 'tab:purple', 'E': 'tab:red', '': 'gray'}
 
 # Plot wells colored by group, with aquifer-type markers
-for _, row in df_all_coords.iterrows():
-    grp = _group_by_site.get(row['site_id'], '')
-    color = group_colors.get(grp, 'gray')
-    marker = 's' if row['aquifer_type'] == 'basalt' else 'o'
-    size = 25 if row['aquifer_type'] == 'basalt' else 80
-    ax.scatter(row['x'], row['y'], c=color, s=size, marker=marker,
-               zorder=5, edgecolors='black', linewidths=0.5)
+# Plot basin-fill (circles) first, then basalt (squares) on top
+for aquifer_order in ['basin-fill', 'basalt']:
+    for _, row in df_all_coords.iterrows():
+        if row['aquifer_type'] != aquifer_order:
+            continue
+        grp = _group_by_site.get(row['site_id'], '')
+        color = group_colors.get(grp, 'gray')
+        marker = 's' if row['aquifer_type'] == 'basalt' else 'o'
+        size = 25 if row['aquifer_type'] == 'basalt' else 80
+        zord = 6 if row['aquifer_type'] == 'basalt' else 5
+        ax.scatter(row['x'], row['y'], c=color, s=size, marker=marker,
+                   zorder=zord, edgecolors='black', linewidths=0.5)
 
-# Legend entries for groups
+# Legend entries for groups (wide rectangles)
+from matplotlib.patches import FancyBboxPatch
+import matplotlib.patches as mpatches
+
+# Collect legend handles manually
+legend_handles = []
 for grp in sorted(group_colors.keys()):
     if grp == '':
         label = 'No group'
     else:
-        label = f'Group {grp}'
-    ax.scatter([], [], c=group_colors[grp], s=40, marker='o',
-               edgecolors='black', linewidths=0.5, label=label)
+        label = f'Group {grp} color'
+    legend_handles.append(mpatches.Rectangle((0, 0), 1.2, 0.6,
+                          facecolor=group_colors[grp], edgecolor='black',
+                          linewidth=0.5, label=label))
 
 # Legend entries for aquifer type (marker shape)
-ax.scatter([], [], c='gray', s=80, marker='o', edgecolors='black',
-           linewidths=0.5, label='Basin-fill (circle)')
-ax.scatter([], [], c='gray', s=25, marker='s', edgecolors='black',
-           linewidths=0.5, label='Basalt (square)')
+from matplotlib.lines import Line2D
+legend_handles.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='gray',
+                             markersize=10, markeredgecolor='black',
+                             markeredgewidth=0.5, label='Basin-fill shape'))
+legend_handles.append(Line2D([0], [0], marker='s', color='w', markerfacecolor='gray',
+                             markersize=6, markeredgecolor='black',
+                             markeredgewidth=0.5, label='Basalt shape'))
 
 texts_10 = []
 for _, row in df_all_coords.iterrows():
@@ -1145,8 +1215,62 @@ ax.set_xlabel('Easting (ft)')
 ax.set_ylabel('Northing (ft)')
 ax.set_title('Walla Walla Basin - Well Locations by Group (WA & OR)\n'
              'NAD 1983 StatePlane Washington South FIPS 4602 (ft)')
-ax.legend(loc='best', fontsize=7)
+ax.legend(handles=legend_handles, loc='best', fontsize=7)
 plt.tight_layout()
 plt.savefig(group_plot_dir / 'WL_well_locations_groups_map.png', dpi=150)
 print(f"Plot 10 saved to {group_plot_dir / 'WL_well_locations_groups_map.png'}")
+plt.close()
+
+
+# =============================================================================
+# Plot 11: Deviation from mean - 23R01 and U03879 only (expanded vertical scale)
+# =============================================================================
+fig_height_11 = 3.5  # half height = 2x ft/inch ratio for better page fit
+
+# Get data for both wells
+wells_11 = [
+    ('USGS-461935118081501', None),   # 23R01
+    (None, 'UMAT0003879'),            # U03879
+]
+
+fig, ax = plt.subplots(figsize=(14, fig_height_11))
+
+linestyle_cycle_11 = ['-', '--']
+
+for i, (site_id, well_name) in enumerate(wells_11):
+    ls = linestyle_cycle_11[i % len(linestyle_cycle_11)]
+    if site_id is not None:
+        mask = df_usgs_dev['monitoring_location_id'] == site_id
+        group_data = df_usgs_dev.loc[mask].sort_values('date')
+        mean_alt_val = mean_wl_alt.get(site_id, 0)
+        label = f"WA - {usgs_label_lookup.get(site_id, site_id)} ({mean_alt_val:.0f})"
+    else:
+        mask = df_owrd_dev['well_id'] == well_name
+        group_data = df_owrd_dev.loc[mask].sort_values('date')
+        mean_alt_val = mean_wl_alt.get(well_name, 0)
+        label = f"OR - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
+
+    if len(group_data) == 0:
+        continue
+
+    ax.plot(group_data['date'], group_data['wl_dev_ft'],
+            label=label, linewidth=1.0, linestyle=ls)
+
+ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
+ax.set_xlim(t_start, t_end)
+ax.set_xlabel('Date')
+ax.set_ylabel('Deviation from Mean WL (ft)')
+ax.set_title('Walla Walla Basin - Deviation from Mean WL: 23R01 & U03879')
+
+ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+ax.xaxis.set_minor_locator(mdates.MonthLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+ax.legend(fontsize=8, loc='best')
+ax.grid(True, alpha=0.3)
+
+plt.tight_layout()
+outfile = group_plot_dir / 'WL_deviation_23R01_U03879.png'
+plt.savefig(outfile, dpi=150)
+print(f"Plot 11 saved to {outfile}")
 plt.close()
