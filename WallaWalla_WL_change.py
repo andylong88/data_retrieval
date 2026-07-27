@@ -677,8 +677,8 @@ for ax in (ax_top, ax_bot):
     ax.legend(fontsize=7, loc='best', ncol=2)
     ax.grid(True, alpha=0.3)
 
-ax_top.set_title(f'Walla Walla Basin - Deviation from Mean WL: SD >= {SD_THRESHOLD} ft')
-ax_bot.set_title(f'Walla Walla Basin - Deviation from Mean WL: SD < {SD_THRESHOLD} ft')
+ax_top.set_title(f'Deviation from Mean WL: SD >= {SD_THRESHOLD} ft')
+ax_bot.set_title(f'Deviation from Mean WL: SD < {SD_THRESHOLD} ft')
 ax_bot.set_xlabel('Date')
 
 plt.tight_layout()
@@ -910,21 +910,33 @@ unique_groups = sorted(set(g for g in group_lookup.values()))
 # Reference ft/inch ratio from the global y-range (used by groups A and B)
 FIG_WIDTH_DEV = 14
 FIG_HEIGHT_DEV = 7  # reference height for groups using global y-range
+# Estimate fixed vertical overhead (title, x-label, tick labels, margins)
+FIG_OVERHEAD_INCHES = 1.5
 global_y_range = global_y_max - global_y_min
-ref_ft_per_inch = global_y_range / FIG_HEIGHT_DEV
+ref_ft_per_inch = global_y_range / (FIG_HEIGHT_DEV - FIG_OVERHEAD_INCHES)
 
 for grp in unique_groups:
     # Determine y-limits and figure height
-    custom_ylim = {'B': (global_y_min, 20), 'C': (-5, 10), 'D': (-15, 15), 'E': (-10, 15)}
+    custom_ylim = {'B': (global_y_min, 20), 'C': (-5, 15), 'D': (-15, 15), 'E': (-10, 15)}
     if grp in custom_ylim:
         y_lo, y_hi = custom_ylim[grp]
         grp_range = y_hi - y_lo
-        fig_height = grp_range / ref_ft_per_inch
+        fig_height = (grp_range / ref_ft_per_inch) + FIG_OVERHEAD_INCHES
     else:
         y_lo, y_hi = global_y_min, global_y_max
         fig_height = FIG_HEIGHT_DEV
 
     fig, ax = plt.subplots(figsize=(FIG_WIDTH_DEV, fig_height))
+
+    # Force consistent plot area by setting axes position explicitly
+    # Leave fixed margins: left=1.0in, right=0.3in, bottom=0.7in, top=0.8in
+    left_margin = 1.0 / FIG_WIDTH_DEV
+    right_margin = 0.3 / FIG_WIDTH_DEV
+    bottom_margin = 0.7 / fig_height
+    top_margin = 0.8 / fig_height
+    ax.set_position([left_margin, bottom_margin,
+                     1 - left_margin - right_margin,
+                     1 - bottom_margin - top_margin])
 
     # Get wells in this group
     grp_wells = df_well_groups[df_well_groups['well_group'] == grp].copy()
@@ -993,7 +1005,15 @@ for grp in unique_groups:
     ax.set_xlim(t_start, t_end)
     ax.set_xlabel('Date')
     ax.set_ylabel('Deviation from Mean WL (ft)')
-    ax.set_title(f'Walla Walla Basin - Deviation from Mean WL: Group {grp}')
+    # Group title suffixes
+    _grp_title_suffix = {
+        'A': '(basin-fill and basalt wells)',
+        'B': '(basin-fill wells)',
+        'C': '(basin-fill wells)',
+        'D': '(basalt wells)',
+        'E': '(basalt wells)',
+    }
+    ax.set_title(f'Deviation from Mean WL: Group {grp} {_grp_title_suffix.get(grp, "")}')
 
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
@@ -1002,7 +1022,6 @@ for grp in unique_groups:
     ax.legend(fontsize=8, loc='best')
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
     outfile = group_plot_dir / f'WL_deviation_group_{grp}.png'
     plt.savefig(outfile, dpi=150)
     print(f"Group {grp} plot saved to {outfile}")
@@ -1260,7 +1279,7 @@ ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
 ax.set_xlim(t_start, t_end)
 ax.set_xlabel('Date')
 ax.set_ylabel('Deviation from Mean WL (ft)')
-ax.set_title('Walla Walla Basin - Deviation from Mean WL: 23R01 & U03879')
+ax.set_title('Deviation from Mean WL: 23R01 & U03879 (basalt wells)')
 
 ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
 ax.xaxis.set_minor_locator(mdates.MonthLocator())
