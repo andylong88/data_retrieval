@@ -966,13 +966,15 @@ for grp in unique_groups:
             mask = df_usgs_dev['monitoring_location_id'] == site_id
             group_data = df_usgs_dev.loc[mask].sort_values('date')
             mean_alt_val = mean_wl_alt.get(site_id, 0)
-            label = f"WA - {usgs_label_lookup.get(site_id, well_name)} ({mean_alt_val:.0f})"
+            aquifer_label = 'Basalt' if _usgs_aquifer_lookup.get(site_id) == 'basalt' else 'Basin fill'
+            label = f"{aquifer_label} - {usgs_label_lookup.get(site_id, well_name)} ({mean_alt_val:.0f})"
         else:
             # OWRD well
             mask = df_owrd_dev['well_id'] == well_name
             group_data = df_owrd_dev.loc[mask].sort_values('date')
             mean_alt_val = mean_wl_alt.get(well_name, 0)
-            label = f"OR - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
+            aquifer_label = 'Basalt' if _owrd_aquifer_lookup.get(well_name) == 'basalt' else 'Basin fill'
+            label = f"{aquifer_label} - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
 
         if len(group_data) == 0:
             continue
@@ -1020,7 +1022,8 @@ for grp in unique_groups:
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 
     ax.legend(fontsize=8, loc='best')
-    ax.grid(True, alpha=0.3)
+    ax.grid(False)
+    ax.yaxis.set_major_locator(plt.MultipleLocator(5))
 
     outfile = group_plot_dir / f'WL_deviation_group_{grp}.png'
     plt.savefig(outfile, dpi=150)
@@ -1262,12 +1265,12 @@ for i, (site_id, well_name) in enumerate(wells_11):
         mask = df_usgs_dev['monitoring_location_id'] == site_id
         group_data = df_usgs_dev.loc[mask].sort_values('date')
         mean_alt_val = mean_wl_alt.get(site_id, 0)
-        label = f"WA - {usgs_label_lookup.get(site_id, site_id)} ({mean_alt_val:.0f})"
+        label = f"Basalt - {usgs_label_lookup.get(site_id, site_id)} ({mean_alt_val:.0f})"
     else:
         mask = df_owrd_dev['well_id'] == well_name
         group_data = df_owrd_dev.loc[mask].sort_values('date')
         mean_alt_val = mean_wl_alt.get(well_name, 0)
-        label = f"OR - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
+        label = f"Basalt - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
 
     if len(group_data) == 0:
         continue
@@ -1286,7 +1289,7 @@ ax.xaxis.set_minor_locator(mdates.MonthLocator())
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 
 ax.legend(fontsize=8, loc='best')
-ax.grid(True, alpha=0.3)
+ax.grid(False)
 
 plt.tight_layout()
 outfile = group_plot_dir / 'WL_deviation_23R01_U03879.png'
