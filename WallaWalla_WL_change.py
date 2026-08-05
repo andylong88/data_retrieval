@@ -1334,6 +1334,7 @@ for _, row in df_well_groups.iterrows():
     well_info_rows.append({
         'site_id': site_id,
         'short_name': short_name,
+        'well_group': row.get('well_group', ''),
         'source': 'USGS',
         'monitoring_location_name': sr.get('monitoring_location_name', ''),
         'aquifer': aquifer,
@@ -1404,6 +1405,7 @@ for _, row in df_well_groups.iterrows():
     well_info_rows.append({
         'site_id': gw_logid,
         'short_name': short_name,
+        'well_group': row.get('well_group', ''),
         'source': 'GWIS',
         'monitoring_location_name': '',
         'aquifer': aquifer,
@@ -1418,7 +1420,7 @@ for _, row in df_well_groups.iterrows():
 
 # Assemble DataFrame
 df_well_info = pd.DataFrame(well_info_rows, columns=[
-    'site_id', 'short_name', 'source', 'monitoring_location_name',
+    'site_id', 'short_name', 'well_group', 'source', 'monitoring_location_name',
     'aquifer', 'altitude_ft', 'well_depth_ft', 'latitude', 'longitude',
     'horizontal_datum', 'vertical_datum', 'construction_date'
 ])
