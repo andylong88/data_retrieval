@@ -1296,3 +1296,135 @@ outfile = group_plot_dir / 'WL_deviation_23R01_U03879.png'
 plt.savefig(outfile, dpi=150)
 print(f"Plot 11 saved to {outfile}")
 plt.close()
+
+
+# =============================================================================
+# Well Info Table
+# =============================================================================
+# Build a summary table of all plotted wells with key attributes.
+
+well_info_rows = []
+
+# --- USGS wells ---
+for _, row in df_well_groups.iterrows():
+    site_id = row['monitoring_location_id']
+    well_name = row['well_name']
+
+    if site_id == 'NA' or pd.isna(site_id):
+        continue  # handled in OWRD section below
+
+    # Look up attributes from site_info
+    site_row = df_site[df_site['monitoring_location_id'] == site_id]
+    if site_row.empty:
+        continue
+
+    sr = site_row.iloc[0]
+
+    # Parse lat/lon from WKT geometry
+    lon, lat = parse_wkt_point(sr['geometry'])
+
+    # Aquifer classification
+    aquifer_code = str(sr.get('aquifer_code', ''))
+    aquifer = 'basalt' if aquifer_code.startswith('122') else 'basin fill'
+
+    # Short name: last 5 chars of monitoring_location_name (matches map labels)
+    loc_name = str(sr.get('monitoring_location_name', ''))
+    short_name = loc_name.split('-')[-1][-5:] if loc_name else well_name
+
+    well_info_rows.append({
+        'site_id': site_id,
+        'short_name': short_name,
+        'source': 'USGS',
+        'monitoring_location_name': sr.get('monitoring_location_name', ''),
+        'aquifer': aquifer,
+        'altitude_ft': sr.get('altitude', np.nan),
+        'well_depth_ft': sr.get('well_constructed_depth', np.nan),
+        'latitude': lat,
+        'longitude': lon,
+        'horizontal_datum': sr.get('original_horizontal_datum', ''),
+        'vertical_datum': sr.get('vertical_datum', ''),
+        'construction_date': sr.get('construction_date', ''),
+    })
+
+# --- OWRD (GWIS) wells ---
+for _, row in df_well_groups.iterrows():
+    site_id = row['monitoring_location_id']
+    well_name = row['well_name']
+
+    if site_id != 'NA' and not pd.isna(site_id):
+        continue  # already handled above
+
+    gw_logid = well_name
+
+    # OWRD site info
+    owrd_row = _owrd_site_info[_owrd_site_info['gw_logid'] == gw_logid]
+    # GWIS site info (has lat/lon, depth, datum, etc.)
+    gwis_row = df_gwis[df_gwis['gw_logid'] == gw_logid]
+
+    # Altitude from OWRD site info
+    altitude = np.nan
+    if not owrd_row.empty:
+        altitude = owrd_row.iloc[0].get('land_surface_elevation_ft', np.nan)
+
+    # Well depth from OWRD site info (total_depth_ft)
+    well_depth = np.nan
+    if not owrd_row.empty:
+        depth_val = owrd_row.iloc[0].get('total_depth_ft', np.nan)
+        try:
+            well_depth = float(depth_val)
+        except (ValueError, TypeError):
+            well_depth = np.nan
+
+    # Vertical datum from OWRD site info
+    vertical_datum = ''
+    if not owrd_row.empty:
+        vertical_datum = str(owrd_row.iloc[0].get('vertical_datum', ''))
+
+    # Coordinates and horizontal datum from GWIS
+    lat, lon, h_datum = np.nan, np.nan, ''
+    if not gwis_row.empty:
+        gr = gwis_row.iloc[0]
+        lat = gr.get('latitude_d', np.nan)
+        lon = gr.get('longitude_', np.nan)
+        h_datum = str(gr.get('lat_long_d', ''))
+
+    # Aquifer from OWRD site info
+    aquifer_raw = ''
+    if not owrd_row.empty:
+        aquifer_raw = str(owrd_row.iloc[0].get('aquifer', ''))
+    aquifer = 'basalt' if 'basalt' in aquifer_raw.lower() else 'basin fill'
+
+    # Construction date: not directly in OWRD_site_info; use GWIS max_depth date
+    # GWIS doesn't have a construction date field either, so leave blank for OWRD
+    construction_date = ''
+
+    # Shortened name
+    short_name = shorten_well_name(gw_logid)
+
+    well_info_rows.append({
+        'site_id': gw_logid,
+        'short_name': short_name,
+        'source': 'GWIS',
+        'monitoring_location_name': '',
+        'aquifer': aquifer,
+        'altitude_ft': altitude,
+        'well_depth_ft': well_depth,
+        'latitude': lat,
+        'longitude': lon,
+        'horizontal_datum': h_datum,
+        'vertical_datum': vertical_datum,
+        'construction_date': construction_date,
+    })
+
+# Assemble DataFrame
+df_well_info = pd.DataFrame(well_info_rows, columns=[
+    'site_id', 'short_name', 'source', 'monitoring_location_name',
+    'aquifer', 'altitude_ft', 'well_depth_ft', 'latitude', 'longitude',
+    'horizontal_datum', 'vertical_datum', 'construction_date'
+])
+
+# Save to CSV
+well_info_path = plot_dir / 'WW_well_info_table.csv'
+df_well_info.to_csv(well_info_path, index=False)
+print(f"\nWell info table ({len(df_well_info)} wells) saved to {well_info_path}")
+print(df_well_info.to_string(index=False))
