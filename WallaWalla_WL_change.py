@@ -27,8 +27,8 @@ import glob
 from pathlib import Path
 
 # Define plot time window
-t_start = pd.Timestamp('2022-07-01')
-t_end = pd.Timestamp('2024-08-01')
+t_start = pd.Timestamp('2003-01-01') # 2020-07-01
+t_end = pd.Timestamp('2026-08-01') # 2024-08-01
 
 # Path to downloaded data
 data_dir = Path('downloaded')
