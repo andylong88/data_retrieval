@@ -95,6 +95,30 @@ print(f"OWRD sites: {df_owrd['well_id'].nunique()}")
 print(f"  Date range: {df_owrd['date'].min().date()} to {df_owrd['date'].max().date()}")
 
 # =============================================================================
+# Load Streamflow Data (USGS 14018500 - Walla Walla River)
+# =============================================================================
+from dataretrieval import waterdata
+
+streamflow_site = 'USGS-14018500'
+streamflow_pcode = '00060'  # Discharge, cubic feet per second
+streamflow_timespan = f"{t_start.strftime('%Y-%m-%d')}/{t_end.strftime('%Y-%m-%d')}"
+
+try:
+    df_streamflow = waterdata.get_daily(
+        monitoring_location_id=[streamflow_site],
+        parameter_code=streamflow_pcode,
+        time=streamflow_timespan
+    )[0]
+    df_streamflow['time'] = pd.to_datetime(df_streamflow['time'], utc=True)
+    df_streamflow['date'] = df_streamflow['time'].dt.normalize().dt.tz_localize(None)
+    df_streamflow = df_streamflow.sort_values('date').reset_index(drop=True)
+    print(f"Streamflow site {streamflow_site}: {len(df_streamflow)} daily values loaded")
+    print(f"  Date range: {df_streamflow['date'].min().date()} to {df_streamflow['date'].max().date()}")
+except Exception as e:
+    print(f"WARNING: Could not retrieve streamflow data for {streamflow_site}: {e}")
+    df_streamflow = pd.DataFrame(columns=['date', 'value'])
+
+# =============================================================================
 # Compute Change from Initial Water Level
 # =============================================================================
 # USGS: 'value' is depth to water (ft below land surface)
@@ -1451,3 +1475,106 @@ well_info_path = plot_dir / 'WW_well_info_table.csv'
 df_well_info.to_csv(well_info_path, index=False)
 print(f"\nWell info table ({len(df_well_info)} wells) saved to {well_info_path}")
 print(df_well_info.to_string(index=False))
+
+
+# =============================================================================
+# Plot 12: Group C Deviation from Mean + Streamflow (USGS 14018500) on right axis
+# =============================================================================
+# Replicates the Group C deviation plot with streamflow on a secondary y-axis.
+
+grp_C = 'C'
+custom_ylim_C = (-5, 15)
+y_lo_C, y_hi_C = custom_ylim_C
+grp_range_C = y_hi_C - y_lo_C
+fig_height_C = (grp_range_C / ref_ft_per_inch) + FIG_OVERHEAD_INCHES
+
+fig, ax_wl = plt.subplots(figsize=(FIG_WIDTH_DEV, fig_height_C))
+
+# Fixed margins matching the per-group plots (same left/bottom/top as Group C;
+# right margin widened from 0.3" to 1.0" to accommodate the right y-axis label)
+left_margin = 1.0 / FIG_WIDTH_DEV
+right_margin = 1.0 / FIG_WIDTH_DEV
+bottom_margin = 0.7 / fig_height_C
+top_margin = 0.8 / fig_height_C
+ax_wl.set_position([left_margin, bottom_margin,
+                    1 - left_margin - right_margin,
+                    1 - bottom_margin - top_margin])
+
+# Get Group C wells
+grp_C_wells = df_well_groups[df_well_groups['well_group'] == grp_C].copy()
+
+# Alternate linestyles
+linestyle_cycle_C = ['-', '--', '-.', ':']
+ls_idx = 0
+
+for _, row in grp_C_wells.iterrows():
+    well_name = row['well_name']
+    site_id = row['monitoring_location_id']
+
+    if site_id != 'NA' and not pd.isna(site_id):
+        # USGS well
+        mask = df_usgs_dev['monitoring_location_id'] == site_id
+        group_data = df_usgs_dev.loc[mask].sort_values('date')
+        mean_alt_val = well_depth_lookup.get(site_id, 0)
+        aquifer_label = 'Basalt' if _usgs_aquifer_lookup.get(site_id) == 'basalt' else 'Basin fill'
+        label = f"{aquifer_label} - {usgs_label_lookup.get(site_id, well_name)} ({mean_alt_val:.0f})"
+    else:
+        # OWRD well
+        mask = df_owrd_dev['well_id'] == well_name
+        group_data = df_owrd_dev.loc[mask].sort_values('date')
+        mean_alt_val = well_depth_lookup.get(well_name, 0)
+        aquifer_label = 'Basalt' if _owrd_aquifer_lookup.get(well_name) == 'basalt' else 'Basin fill'
+        label = f"{aquifer_label} - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
+
+    if len(group_data) == 0:
+        continue
+
+    ls = linestyle_cycle_C[ls_idx % len(linestyle_cycle_C)]
+    ax_wl.plot(group_data['date'], group_data['wl_dev_ft'],
+               label=label, linewidth=0.8, linestyle=ls, zorder=2)
+    ls_idx += 1
+
+# Reference line at zero
+ax_wl.axhline(0, color='black', linewidth=0.5, linestyle=':')
+
+# WL axis formatting
+ax_wl.set_ylim(y_lo_C, y_hi_C)
+ax_wl.set_xlim(t_start, t_end)
+ax_wl.set_xlabel('Date')
+ax_wl.set_ylabel('Deviation from Mean WL (ft)')
+ax_wl.set_title('Deviation from Mean WL: Group C (basin-fill wells) + Streamflow at USGS 14018500')
+
+ax_wl.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+ax_wl.xaxis.set_minor_locator(mdates.MonthLocator())
+ax_wl.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+ax_wl.yaxis.set_major_locator(plt.MultipleLocator(5))
+ax_wl.grid(False)
+
+# --- Right axis: streamflow ---
+ax_q = ax_wl.twinx()
+# Force the twin axis to occupy the same position as the WL axis
+ax_q.set_position(ax_wl.get_position())
+ax_q.set_xlim(t_start, t_end)  # ensure same time scale as left axis
+
+if len(df_streamflow) > 0:
+    # Filter streamflow to the plot time window
+    mask_q = (df_streamflow['date'] >= t_start) & (df_streamflow['date'] <= t_end)
+    df_q_plot = df_streamflow.loc[mask_q]
+    ax_q.plot(df_q_plot['date'], df_q_plot['value'] / 1000.0,
+              color='tab:cyan', linewidth=0.6, alpha=0.7, label='Streamflow (14018500)')
+    ax_q.set_ylabel('Discharge (1000 cfs)', color='tab:cyan')
+    ax_q.tick_params(axis='y', labelcolor='tab:cyan')
+else:
+    ax_q.set_ylabel('Discharge (1000 cfs) - NO DATA')
+
+# Combine legends from both axes
+lines_wl, labels_wl = ax_wl.get_legend_handles_labels()
+lines_q, labels_q = ax_q.get_legend_handles_labels()
+ax_wl.legend(lines_wl + lines_q, labels_wl + labels_q, fontsize=8, loc='best')
+
+# Do NOT call tight_layout — preserve set_position so the left axis
+# has the same in/ft ratio as the plain Group C plot.
+outfile_C_q = group_plot_dir / 'WL_deviation_group_C_streamflow.png'
+plt.savefig(outfile_C_q, dpi=150)
+print(f"Plot 12 (Group C + streamflow) saved to {outfile_C_q}")
+plt.close()
