@@ -366,6 +366,21 @@ for well_id, group in df_owrd.groupby('well_id'):
     if len(vals) > 0:
         mean_wl_alt[well_id] = vals.mean()
 
+# Well depth lookup for legend labels
+well_depth_lookup = {}
+# USGS: well_constructed_depth from site_info
+for _, _r in df_site.iterrows():
+    _d = _r.get('well_constructed_depth', np.nan)
+    if pd.notna(_d):
+        well_depth_lookup[_r['monitoring_location_id']] = _d
+# OWRD: total_depth_ft from OWRD_site_info
+for _, _r in _owrd_site_info.iterrows():
+    _d = _r.get('total_depth_ft', np.nan)
+    try:
+        well_depth_lookup[_r['gw_logid']] = float(_d)
+    except (ValueError, TypeError):
+        pass
+
 # --- Plot 3a: Map with Site IDs only ---
 fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -531,7 +546,7 @@ for site, group in df_usgs_daily.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['z_score'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({well_depth_lookup.get(site, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
             lowess[:, 1], label=label, linewidth=0.8,
             linestyle=get_linestyle_usgs(site))
@@ -551,7 +566,7 @@ for well_id, group in df_owrd.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['z_score'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    label = f"OR - {shorten_well_name(well_id)} ({well_depth_lookup.get(well_id, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
             lowess[:, 1], label=label, linewidth=0.8,
             linestyle=get_linestyle_owrd(well_id))
@@ -640,7 +655,7 @@ fig, (ax_top, ax_bot) = plt.subplots(
 for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     group_sorted = group.sort_values('date')
     sd_val = usgs_sd_lookup.get(site, 0)
-    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({well_depth_lookup.get(site, 0):.0f})"
     ls = get_linestyle_usgs(site)
     if sd_val >= SD_THRESHOLD:
         ax_top.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
@@ -653,7 +668,7 @@ for site, group in df_usgs_dev.groupby('monitoring_location_id'):
 for well_id, group in df_owrd_dev.groupby('well_id'):
     group_sorted = group.sort_values('date')
     sd_val = owrd_sd_lookup.get(well_id, 0)
-    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    label = f"OR - {shorten_well_name(well_id)} ({well_depth_lookup.get(well_id, 0):.0f})"
     ls = get_linestyle_owrd(well_id)
     if sd_val >= SD_THRESHOLD:
         ax_top.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
@@ -696,14 +711,14 @@ fig, ax = plt.subplots(figsize=(14, 7))
 # Plot USGS (WA) sites
 for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     group_sorted = group.sort_values('date')
-    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({well_depth_lookup.get(site, 0):.0f})"
     ax.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
             label=label, linewidth=0.8, linestyle=get_linestyle_usgs(site))
 
 # Plot OWRD (OR) sites
 for well_id, group in df_owrd_dev.groupby('well_id'):
     group_sorted = group.sort_values('date')
-    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    label = f"OR - {shorten_well_name(well_id)} ({well_depth_lookup.get(well_id, 0):.0f})"
     ax.plot(group_sorted['date'], group_sorted['wl_dev_ft'],
             label=label, linewidth=0.8, linestyle=get_linestyle_owrd(well_id))
 
@@ -744,7 +759,7 @@ for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({well_depth_lookup.get(site, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
             lowess[:, 1], label=label, linewidth=0.8,
             linestyle=get_linestyle_usgs(site))
@@ -758,7 +773,7 @@ for well_id, group in df_owrd_dev.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    label = f"OR - {shorten_well_name(well_id)} ({well_depth_lookup.get(well_id, 0):.0f})"
     ax.plot(pd.to_datetime(lowess[:, 0], unit='D', origin=t_start),
             lowess[:, 1], label=label, linewidth=0.8,
             linestyle=get_linestyle_owrd(well_id))
@@ -800,7 +815,7 @@ for site, group in df_usgs_dev.groupby('monitoring_location_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"WA - {usgs_label_lookup.get(site, site)} ({mean_wl_alt.get(site, 0):.0f})"
+    label = f"WA - {usgs_label_lookup.get(site, site)} ({well_depth_lookup.get(site, 0):.0f})"
     dates_smooth = pd.to_datetime(lowess[:, 0], unit='D', origin=t_start)
     ls = get_linestyle_usgs(site)
     if sd_val >= SD_THRESHOLD:
@@ -820,7 +835,7 @@ for well_id, group in df_owrd_dev.groupby('well_id'):
     x = (group_sorted['date'] - t_start).dt.days.values.astype(float)
     y = group_sorted['wl_dev_ft'].values
     lowess = sm.nonparametric.lowess(y, x, frac=loess_frac)
-    label = f"OR - {shorten_well_name(well_id)} ({mean_wl_alt.get(well_id, 0):.0f})"
+    label = f"OR - {shorten_well_name(well_id)} ({well_depth_lookup.get(well_id, 0):.0f})"
     dates_smooth = pd.to_datetime(lowess[:, 0], unit='D', origin=t_start)
     ls = get_linestyle_owrd(well_id)
     if sd_val >= SD_THRESHOLD:
@@ -965,14 +980,14 @@ for grp in unique_groups:
             # USGS well
             mask = df_usgs_dev['monitoring_location_id'] == site_id
             group_data = df_usgs_dev.loc[mask].sort_values('date')
-            mean_alt_val = mean_wl_alt.get(site_id, 0)
+            mean_alt_val = well_depth_lookup.get(site_id, 0)
             aquifer_label = 'Basalt' if _usgs_aquifer_lookup.get(site_id) == 'basalt' else 'Basin fill'
             label = f"{aquifer_label} - {usgs_label_lookup.get(site_id, well_name)} ({mean_alt_val:.0f})"
         else:
             # OWRD well
             mask = df_owrd_dev['well_id'] == well_name
             group_data = df_owrd_dev.loc[mask].sort_values('date')
-            mean_alt_val = mean_wl_alt.get(well_name, 0)
+            mean_alt_val = well_depth_lookup.get(well_name, 0)
             aquifer_label = 'Basalt' if _owrd_aquifer_lookup.get(well_name) == 'basalt' else 'Basin fill'
             label = f"{aquifer_label} - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
 
@@ -1264,12 +1279,12 @@ for i, (site_id, well_name) in enumerate(wells_11):
     if site_id is not None:
         mask = df_usgs_dev['monitoring_location_id'] == site_id
         group_data = df_usgs_dev.loc[mask].sort_values('date')
-        mean_alt_val = mean_wl_alt.get(site_id, 0)
+        mean_alt_val = well_depth_lookup.get(site_id, 0)
         label = f"Basalt - {usgs_label_lookup.get(site_id, site_id)} ({mean_alt_val:.0f})"
     else:
         mask = df_owrd_dev['well_id'] == well_name
         group_data = df_owrd_dev.loc[mask].sort_values('date')
-        mean_alt_val = mean_wl_alt.get(well_name, 0)
+        mean_alt_val = well_depth_lookup.get(well_name, 0)
         label = f"Basalt - {shorten_well_name(well_name)} ({mean_alt_val:.0f})"
 
     if len(group_data) == 0:
@@ -1340,6 +1355,7 @@ for _, row in df_well_groups.iterrows():
         'aquifer': aquifer,
         'altitude_ft': sr.get('altitude', np.nan),
         'well_depth_ft': sr.get('well_constructed_depth', np.nan),
+        'mean_wl_altitude_ft': mean_wl_alt.get(site_id, np.nan),
         'latitude': lat,
         'longitude': lon,
         'horizontal_datum': sr.get('original_horizontal_datum', ''),
@@ -1411,6 +1427,7 @@ for _, row in df_well_groups.iterrows():
         'aquifer': aquifer,
         'altitude_ft': altitude,
         'well_depth_ft': well_depth,
+        'mean_wl_altitude_ft': mean_wl_alt.get(gw_logid, np.nan),
         'latitude': lat,
         'longitude': lon,
         'horizontal_datum': h_datum,
@@ -1421,9 +1438,13 @@ for _, row in df_well_groups.iterrows():
 # Assemble DataFrame
 df_well_info = pd.DataFrame(well_info_rows, columns=[
     'site_id', 'short_name', 'well_group', 'source', 'monitoring_location_name',
-    'aquifer', 'altitude_ft', 'well_depth_ft', 'latitude', 'longitude',
+    'aquifer', 'altitude_ft', 'well_depth_ft', 'mean_wl_altitude_ft',
+    'latitude', 'longitude',
     'horizontal_datum', 'vertical_datum', 'construction_date'
 ])
+
+# Sort by well group
+df_well_info = df_well_info.sort_values('well_group').reset_index(drop=True)
 
 # Save to CSV
 well_info_path = plot_dir / 'WW_well_info_table.csv'
