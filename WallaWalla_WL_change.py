@@ -405,6 +405,30 @@ for _, _r in _owrd_site_info.iterrows():
     except (ValueError, TypeError):
         pass
 
+# --- Save well locations to GeoPackage ---
+import geopandas as gpd
+from shapely.geometry import Point
+
+gdf_wells = gpd.GeoDataFrame(
+    df_all_coords.copy(),
+    geometry=[Point(lon, lat) for lon, lat in zip(df_all_coords['lon'], df_all_coords['lat'])],
+    crs='EPSG:4326'
+)
+# Add well_group attribute from well_groups CSV
+_wg_group_lookup = {}
+for _, _r in _wg.iterrows():
+    _sid = _r['monitoring_location_id']
+    _wn = _r['well_name']
+    _grp = str(_r.get('well_group', '')).strip()
+    if _sid != 'NA' and pd.notna(_sid):
+        _wg_group_lookup[_sid] = _grp
+    else:
+        _wg_group_lookup[_wn] = _grp
+gdf_wells['well_group'] = gdf_wells['site_id'].map(_wg_group_lookup)
+gpkg_path = plot_dir / 'WW_well_locations.gpkg'
+gdf_wells.to_file(gpkg_path, driver='GPKG')
+print(f"Well locations ({len(gdf_wells)} wells) saved to {gpkg_path}")
+
 # --- Plot 3a: Map with Site IDs only ---
 fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -898,7 +922,10 @@ plt.close()
 # Per-group plots: Deviation from mean, one file per well group
 # =============================================================================
 # Read well groups
-df_well_groups = pd.read_csv(Path('script_input') / 'well_groups.csv')
+df_well_groups_all = pd.read_csv(Path('script_input') / 'well_groups.csv')
+
+# Filter to only wells flagged for hydrograph plotting
+df_well_groups = df_well_groups_all[df_well_groups_all['hydrograph'] == 1].reset_index(drop=True)
 
 # Output directory for group plots
 group_plot_dir = Path('plots') / 'by_group'
@@ -1203,9 +1230,9 @@ for grp in unique_groups:
 # =============================================================================
 fig, ax = plt.subplots(figsize=(10, 8))
 
-# Build group lookup from well_groups file
+# Build group lookup from well_groups file (use ALL wells, not just hydrograph=1)
 _group_by_site = {}
-for _, row in df_well_groups.iterrows():
+for _, row in df_well_groups_all.iterrows():
     wg = str(row.get('well_group', '')).strip()
     if wg == 'nan':
         wg = ''
