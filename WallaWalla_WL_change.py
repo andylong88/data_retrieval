@@ -27,8 +27,8 @@ import glob
 from pathlib import Path
 
 # Define plot time window
-t_start = pd.Timestamp('2003-01-01') # 2020-07-01
-t_end = pd.Timestamp('2026-08-01') # 2024-08-01
+t_start = pd.Timestamp('2020-07-01') # 2020-07-01
+t_end = pd.Timestamp('2024-08-01') # 2024-08-01
 
 # Path to downloaded data
 data_dir = Path('downloaded')
@@ -66,7 +66,16 @@ df_usgs_daily = (
     .reset_index()
 )
 
+# Compute first/last measurement dates from full downloaded data (before filtering)
+usgs_date_range = (
+    df_usgs_daily.groupby('monitoring_location_id')['date']
+    .agg(first_measurement='min', last_measurement='max')
+    .reset_index()
+    .rename(columns={'monitoring_location_id': 'site_id'})
+)
+
 # Filter to plot window
+df_usgs_daily_all = df_usgs_daily.copy()  # Keep unfiltered copy for Plot 13
 df_usgs_daily = df_usgs_daily[
     (df_usgs_daily['date'] >= t_start) & (df_usgs_daily['date'] <= t_end)
 ].copy()
@@ -86,7 +95,19 @@ for filepath in owrd_files:
 
 df_owrd = pd.concat(owrd_frames, ignore_index=True)
 
+# Compute first/last measurement dates from full downloaded data (before filtering)
+owrd_date_range = (
+    df_owrd.groupby('well_id')['date']
+    .agg(first_measurement='min', last_measurement='max')
+    .reset_index()
+    .rename(columns={'well_id': 'site_id'})
+)
+
+# Combine USGS and OWRD date ranges
+all_date_ranges = pd.concat([usgs_date_range, owrd_date_range], ignore_index=True)
+
 # Filter to plot window
+df_owrd_all = df_owrd.copy()  # Keep unfiltered copy for Plot 13
 df_owrd = df_owrd[
     (df_owrd['date'] >= t_start) & (df_owrd['date'] <= t_end)
 ].copy()
@@ -425,9 +446,6 @@ for _, _r in _wg.iterrows():
     else:
         _wg_group_lookup[_wn] = _grp
 gdf_wells['well_group'] = gdf_wells['site_id'].map(_wg_group_lookup)
-gpkg_path = plot_dir / 'WW_well_locations.gpkg'
-gdf_wells.to_file(gpkg_path, driver='GPKG')
-print(f"Well locations ({len(gdf_wells)} wells) saved to {gpkg_path}")
 
 # --- Plot 3a: Map with Site IDs only ---
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -1497,11 +1515,27 @@ df_well_info = pd.DataFrame(well_info_rows, columns=[
 # Sort by well group
 df_well_info = df_well_info.sort_values('well_group').reset_index(drop=True)
 
+# Add first/last measurement dates from downloaded data
+df_well_info = df_well_info.merge(all_date_ranges, on='site_id', how='left')
+
 # Save to CSV
 well_info_path = plot_dir / 'WW_well_info_table.csv'
 df_well_info.to_csv(well_info_path, index=False)
 print(f"\nWell info table ({len(df_well_info)} wells) saved to {well_info_path}")
 print(df_well_info.to_string(index=False))
+
+# Save to GeoPackage
+gdf_well_info = gpd.GeoDataFrame(
+    df_well_info.copy(),
+    geometry=[
+        Point(lon, lat) if pd.notna(lon) and pd.notna(lat) else None
+        for lon, lat in zip(df_well_info['longitude'], df_well_info['latitude'])
+    ],
+    crs='EPSG:4326'
+)
+well_info_gpkg_path = plot_dir / 'WW_well_info_table.gpkg'
+gdf_well_info.to_file(well_info_gpkg_path, driver='GPKG')
+print(f"Well info table ({len(gdf_well_info)} wells) saved to {well_info_gpkg_path}")
 
 
 # =============================================================================
@@ -1604,4 +1638,120 @@ ax_wl.legend(lines_wl + lines_q, labels_wl + labels_q, fontsize=8, loc='best')
 outfile_C_q = group_plot_dir / 'WL_deviation_group_C_streamflow.png'
 plt.savefig(outfile_C_q, dpi=150)
 print(f"Plot 12 (Group C + streamflow) saved to {outfile_C_q}")
+plt.close()
+
+# =============================================================================
+# Plot 13: Deviation from mean - wells with first measurement <= 2020-01-01
+# =============================================================================
+# Wells that began measuring on or before 2020-01-01 (7 wells), plotted from
+# 2004-04-01 to most recent data. Uses unfiltered data (df_usgs_daily_all,
+# df_owrd_all) so data outside the main t_start/t_end window is available.
+
+# Build a linestyle lookup that replicates the group plot assignments.
+# In the group plots, wells are iterated in df_well_groups order per group,
+# cycling through ['-', '--', '-.', ':'], with special cases for group E.
+_linestyle_cycle = ['-', '--', '-.', ':']
+_well_linestyle_lookup = {}
+_well_linewidth_lookup = {}
+_well_color_lookup = {}
+
+for _grp in unique_groups:
+    _grp_wells = df_well_groups[df_well_groups['well_group'] == _grp].copy()
+    if _grp == 'E':
+        def _get_sd_13(row):
+            _sid = row['monitoring_location_id']
+            _wn = row['well_name']
+            if _sid != 'NA' and not pd.isna(_sid):
+                return usgs_sd_lookup.get(_sid, 0)
+            else:
+                return owrd_sd_lookup.get(_wn, 0)
+        _grp_wells = _grp_wells.assign(_sd=_grp_wells.apply(_get_sd_13, axis=1))
+        _grp_wells = _grp_wells.sort_values('_sd', ascending=False)
+
+    _ls_idx = 0
+    for _, _row in _grp_wells.iterrows():
+        _wn = _row['well_name']
+        _sid = _row['monitoring_location_id']
+        _key = _sid if (_sid != 'NA' and not pd.isna(_sid)) else _wn
+
+        if _sid == 'USGS-461935118081501' and _grp == 'E':
+            _well_linestyle_lookup[_key] = '-'
+            _well_linewidth_lookup[_key] = 3.0
+            _well_color_lookup[_key] = 'lightgray'
+        elif _wn == 'UMAT0058161' and _grp == 'E':
+            _well_linestyle_lookup[_key] = _linestyle_cycle[_ls_idx % len(_linestyle_cycle)]
+            _well_linewidth_lookup[_key] = 1.5
+            _ls_idx += 1
+        else:
+            _well_linestyle_lookup[_key] = _linestyle_cycle[_ls_idx % len(_linestyle_cycle)]
+            _well_linewidth_lookup[_key] = 0.8
+            _ls_idx += 1
+
+recent_wells = df_well_info[
+    df_well_info['first_measurement'] <= '2020-01-01'
+]['site_id'].tolist()
+
+t_start_13 = pd.Timestamp('2004-01-01')
+t_end_13 = pd.Timestamp('2026-07-01')
+
+# Compute deviation from mean for these wells using full unfiltered data
+fig, ax = plt.subplots(figsize=(FIG_WIDTH_DEV, FIG_HEIGHT_DEV))
+
+for site_id in sorted(recent_wells):
+    if site_id.startswith('USGS'):
+        site_data = df_usgs_daily_all[
+            (df_usgs_daily_all['monitoring_location_id'] == site_id) &
+            (df_usgs_daily_all['date'] >= t_start_13)
+        ].sort_values('date').copy()
+        if len(site_data) == 0:
+            continue
+        mean_val = site_data['value'].mean()
+        site_data['wl_dev_ft'] = -(site_data['value'] - mean_val)
+        depth_val = well_depth_lookup.get(site_id, 0)
+        aquifer_label = 'Basalt' if _usgs_aquifer_lookup.get(site_id) == 'basalt' else 'Basin fill'
+        short_label = usgs_label_lookup.get(site_id, site_id)
+    else:
+        site_data = df_owrd_all[
+            (df_owrd_all['well_id'] == site_id) &
+            (df_owrd_all['date'] >= t_start_13)
+        ].sort_values('date').copy()
+        if len(site_data) == 0:
+            continue
+        mean_val = site_data['wl_ft_below_land_surface'].mean()
+        site_data['wl_dev_ft'] = -(site_data['wl_ft_below_land_surface'] - mean_val)
+        depth_val = well_depth_lookup.get(site_id, 0)
+        aquifer_label = 'Basalt' if _owrd_aquifer_lookup.get(site_id) == 'basalt' else 'Basin fill'
+        short_label = shorten_well_name(site_id)
+
+    ls = _well_linestyle_lookup.get(site_id, '-')
+    lw = _well_linewidth_lookup.get(site_id, 0.8)
+    color = _well_color_lookup.get(site_id, None)
+
+    label = f"{aquifer_label} - {short_label} ({depth_val:.0f})"
+    plot_kwargs = dict(label=label, linewidth=lw, linestyle=ls)
+    if color:
+        plot_kwargs['color'] = color
+        plot_kwargs['zorder'] = 1
+    ax.plot(site_data['date'], site_data['wl_dev_ft'], **plot_kwargs)
+
+# Reference line at zero
+ax.axhline(0, color='black', linewidth=0.5, linestyle=':')
+
+ax.set_xlim(t_start_13, t_end_13)
+ax.set_xlabel('Date')
+ax.set_ylabel('Deviation from Mean WL (ft)')
+ax.set_title('Deviation from Mean WL: Wells with Records Starting <= 2020 (2004\u2013present)')
+
+ax.xaxis.set_major_locator(mdates.YearLocator())
+ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+ax.legend(fontsize=8, loc='best')
+ax.grid(False)
+ax.yaxis.set_major_locator(plt.MultipleLocator(5))
+
+plt.tight_layout()
+outfile_13 = group_plot_dir / 'WL_deviation_long_record_wells.png'
+plt.savefig(outfile_13, dpi=150)
+print(f"Plot 13 saved to {outfile_13}")
 plt.close()
