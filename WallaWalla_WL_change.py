@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use('Agg')
 
 import warnings
-warnings.filterwarnings('ignore', message='posx and posy should be finite values')
+warnings.filterwarnings('ignore', message='.*posx and posy.*')
 
 import pandas as pd
 import numpy as np
@@ -27,7 +27,7 @@ import glob
 from pathlib import Path
 
 # Define plot time window
-t_start = pd.Timestamp('2020-07-01') # 2020-07-01
+t_start = pd.Timestamp('2022-07-01') # 2022-07-01
 t_end = pd.Timestamp('2024-08-01') # 2024-08-01
 
 # Path to downloaded data
